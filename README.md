@@ -1,52 +1,106 @@
-# Mouse de Sopro com mais de um sensor BMP280.
-## 
-##
+# Mouse de Sopro (Sip-and-Puff) com Transdutor Analógico
 
-## LISTA DE MATERIAIS:
+Este projeto consiste em um mouse de acessibilidade controlado por sopro e sucção (Sip-and-Puff) e um joystick analógico. O sistema utiliza um Arduino com capacidade HID nativa para emular um mouse USB padrão.
 
-- 1 - Arduino Leonardo 
-- 3 - Sensores BMP280 
-- 1 - Multiplexer I2C 
-- 1 - Level Shifter
-- 1 - Fonte Externa 
-- 1 - Conversor USB-Serial para depuração
-- 1 - Joystick
+> **Atualização (17/11/2025):** O projeto migrou de sensores digitais BMP280 (I2C) para um transdutor de pressão analógico dedicado. Esta mudança simplificou o hardware, eliminou a necessidade de conversores de nível lógico e multiplexadores, e resolveu problemas de instabilidade na comunicação.
 
-## Considerações:
-* Level Shifter:
-- Os BMP280 nas versões que experimentamos não tinham level shifter  integrado, sendo necessário a utilização de um módulo à parte.  
+## 📋 Lista de Materiais (Hardware Atual)
 
-* Mux I2C:
+* **Microcontrolador:** Arduino Leonardo ou Pro Micro (ATmega32U4).
+* **Sensor de Pressão:** 1x Transdutor de Pressão Analógico (Range típico: -14.5 a 30 PSI ou similar, Saída: 0.5V ~ 4.5V).
+* **Navegação:** 1x Módulo Joystick Analógico (KY-023 ou similar).
+* **Conexão:** Cabos Jumper e Protoboard (ou PCB customizada).
+* **Alimentação:** Via cabo USB (5V) conectado ao computador.
 
-    - Para o uso de mais de dois sensores é necessário o uso de um Multiplexer I2C.
+---
 
-* Fonte Externa:
+## ⚙️ Configuração e Pinos
 
-    - Para o funcionamento de todos esses módulos é necessário que o Arduino seja alimentado por uma fonte externa.
+O código foi simplificado para leitura analógica direta. Não são necessárias bibliotecas externas além da `Mouse.h` (padrão do Arduino).
 
+### Mapa de Pinos (Pinout)
 
-## Erros corrigidos: 
-* Travamentos de leitura I2C/BMP280: 
+| Componente | Pino do Módulo | Pino no Arduino | Função |
+| :--- | :--- | :--- | :--- |
+| **Transdutor** | Sinal (Signal) | **A0** | Leitura da pressão (Sopro/Sucção) |
+| **Joystick** | VRx (Horizontal) | **A1** | Movimento do cursor (Eixo X) |
+| **Joystick** | VRy (Vertical) | **A2** | Movimento do cursor (Eixo Y) |
+| **Alimentação**| VCC / GND | 5V / GND | Alimentação comum para todos os módulos |
 
-Problema nos níveis digitais. Solucionado com emprego do level shifter 
+---
 
-* Leitura muito abaixo da média calculada: 
+## 🎮 Funcionalidades e Modos de Operação
 
-Alimentação pela USB não fornecia corrente necessária. Solucionado com o uso de uma fonte externa.
-Usamos a fonte de bancada, será substituido por baterias recarregáveis padrão 16850
+O sistema calibra automaticamente a pressão atmosférica local ao iniciar (não sopre no tubo durante os primeiros 2 segundos ao ligar).
 
-## Tarefas:
-* Quando os fios da saída do mux são tocados pelas mãos, os valores lidos dos sensores mudam.
+### Comandos de Sopro e Sucção
 
-* Pesquisar se é necessário o uso de resistores de pullups nas linhas I2C e onde colocá-los. 
+O software diferencia ações baseadas no tempo de duração do sopro/sucção (Limiar de tempo: 600ms).
 
-* Quando se usa Mouse.begin() no setup, a conexão da serial-usb com o windows fica instável e as vezes não reconhecendo o mouse. Deveríamos saber o porquê.
+1.  **Sopro Rápido:** Clique Esquerdo (Simples).
+2.  **Suga Rápido:** Clique Direito.
+3.  **Sopro Longo:** Clique Duplo Esquerdo (Double Click).
+4.  **Suga Longo:** Ativa modo **Arrastar (Drag & Drop)**.
+    * *O botão esquerdo "segura" o clique. Para soltar o item arrastado, basta realizar um sopro (curto ou longo).*
 
-* Demais formas de interferência elétricas/magnéticas que ocasionam falha na comunicação i2c.
+---
 
-* Testar uma versão do hardware com todas as ligações soldadas, ao invés do uso de cabos jumper. 
+## 🛠️ Como Ajustar (Calibragem)
 
-* Verificar se a frequência do I2C é compatível com os modulos conectados à ela.
+No código fonte, existem variáveis que podem ser alteradas para ajustar o conforto do usuário:
 
-## Debug:
-Foi usada a segunda porta serial para fazer a leitura dos dados dos sensores. Usamos um módulo USB-Serial padrão e ligamos aos pinos TX, RX. Desta forma utilizamos algo do tipo:  "Serial1.println". 
+* `mouseSensitivity`: Aumente para o cursor mover mais rápido.
+* `pressureThreshold`: Aumente se o mouse estiver clicando sozinho; diminua se for necessário muita força pulmonar.
+* `longPressTime`: Tempo em milissegundos para diferenciar um clique curto de um comando longo.
+
+---
+
+## 📜 Histórico e Evolução do Projeto
+
+### Versão Anterior (Descontinuada - I2C/BMP280)
+Inicialmente, o projeto tentou utilizar módulos BMP280. Embora funcionais, apresentaram alta complexidade de hardware:
+* **Materiais Antigos:** 3x BMP280, Multiplexer I2C, Level Shifter, Fonte Externa.
+* **Problemas Enfrentados:** * Conflito de endereços I2C (exigia Multiplexer).
+    * Incompatibilidade de tensão lógica 3.3V/5V (exigia Level Shifter).
+    * Instabilidade e travamentos na comunicação I2C devido a interferências elétricas ao tocar nos fios.
+    * Necessidade de fonte externa devido ao consumo e quedas de tensão.
+
+**Solução:** A substituição pelo **Transdutor Analógico de 5V** eliminou todos os pontos de falha acima, resultando em um circuito mais robusto, mais barato e mais fácil de montar.
+
+---
+
+## 💻 Cabeçalho do Código Fonte
+
+```cpp
+/*
+ ================================================================================
+  Mouse de Sopro (Transdutor) 17/11/2025 - Funções de Modo e Correções
+ ================================================================================
+ Descrição Geral:
+  Este código transforma um Arduino com capacidade USB nativa em um mouse,
+  controlado por botões. 
+
+  Compatibilidade:
+  - Placas: Funciona em Arduinos com capacidade HID nativa, como Leonardo,
+    Pro Micro e Due.
+  - Bibliotecas: Requer as bibliotecas padrão "Mouse.h".
+ ================================================================================ 
+  Modos de Operação:
+   
+  1. Modo Mouse (Padrão):
+      - Controle o cursor com o movimento do módulo analógico.
+      - Botões de ação (clique esquerdo e clique direito):
+        - Clique esquerdo: Aplicando pressão positiva (sopro) ao transdutor de pressão;
+        - Clique direito: Aplicando pressão negativa (sugar) ao transdutor de pressão
+   
+ ================================================================================
+    Pinos:
+  --------------------------------------------------------------------------------
+  BOTÕES DE AÇÃO:
+  * Pino A0: Sinal do Transdutor
+   
+  ENCODERS (JOYSTICK):
+  * Pino A1: Encoder Horizontal CLK
+  * Pino A2: Encoder Horizontal DT
+    ================================================================================
+*/
