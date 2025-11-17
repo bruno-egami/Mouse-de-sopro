@@ -1,182 +1,252 @@
 /*
  ================================================================================
-  Mouse de Sopro (Transdutor) 17/11/2025 - Rev 4: Novas Funções de Suga
+  PROJETO: Mouse de Sopro (Sip-and-Puff) Controlado por Transdutor
+  DATA: 17/11/2025
+  VERSÃO: Rev 4 (Comentada)
  ================================================================================
- Descrição Geral:
-  Mouse de sopro (Sip-and-Puff) com joystick, utilizando transdutor analógico.
-  
-  Modos de Operação:
-  1. Joystick: Movimento do cursor (Eixos X/Y).
-  2. Transdutor (Lógica Atualizada): 
-     - Sopro Curto: Clique Esquerdo
-     - Sopro Longo: Clique Duplo Esquerdo
-     - Suga Curto:  Trava/Destrava Clique Esquerdo (Arrastar)
-     - Suga Longo:  Clique Direito
+ DESCRIÇÃO:
+  Este código transforma um Arduino (Leonardo/Pro Micro) em um mouse acessível.
+  - O movimento é controlado por um joystick analógico.
+  - Os cliques são controlados por um transdutor de pressão (Sopro e Sucção).
 
- ================================================================================
-    Pinos:
-  * A0: Transdutor de Pressão
-  * A1: Eixo X (Horizontal)
-  * A2: Eixo Y (Vertical)
-  * 13: LED de Status (Pisca na calibração)
+ COMPATIBILIDADE:
+  - Arduino Leonardo, Pro Micro, Micro (Chip ATmega32U4).
+  
+ MODOS DE OPERAÇÃO (LÓGICA):
+  1. Sopro Curto: Clique Esquerdo (Simples).
+  2. Sopro Longo: Clique Duplo (Double Click).
+  3. Suga Curto:  Trava/Destrava o Clique Esquerdo (Função Arrastar/Drag).
+  4. Suga Longo:  Clique Direito.
  ================================================================================
 */
 
+// Inclui a biblioteca nativa do Arduino para emular um Mouse USB
 #include <Mouse.h>
 
-// --- Configurações de Hardware ---
-const int pinTransducer = A0;
-const int pinJoyX = A1;
-const int pinJoyY = A2;
-const int pinLed = 13; 
+// ==============================================================================
+// 1. CONFIGURAÇÕES DE HARDWARE (PINOUT)
+// ==============================================================================
+// Define em quais pinos físicos os componentes estão conectados
+const int pinTransducer = A0; // Pino do sinal do Transdutor de Pressão
+const int pinJoyX = A1;       // Pino do eixo horizontal do Joystick
+const int pinJoyY = A2;       // Pino do eixo vertical do Joystick
+const int pinLed = 13;        // LED da placa (usado para indicar calibração)
 
-// --- Configurações de Movimento e Sentido ---
+// ==============================================================================
+// 2. AJUSTES DE SENSIBILIDADE E PREFERÊNCIAS
+// ==============================================================================
+// Define a velocidade do cursor. Quanto maior o número, mais rápido o mouse move.
 const int mouseSensitivity = 5;       
+
+// Define a orientação do joystick. 
+// Mude para 'true' ou 'false' caso o mouse esteja se movendo ao contrário.
 const bool invertHorizontal = true;   
-const bool invertVertical   = false;  
+const bool invertVertical   = true;  
 
-// --- Configurações de Pressão e Tempo ---
-const int pressureThreshold = 30;        // Força para ativar
-const unsigned long longPressTime = 600; // Tempo para ação longa (ms)
+// Define a "força" necessária no sopro/sucção para ativar o clique.
+// Valor entre 0 e 1023. Aumente se estiver clicando sozinho.
+const int pressureThreshold = 30;        
 
-// --- CONFIGURAÇÕES DE CALIBRAÇÃO ---
+// Define quanto tempo (em milissegundos) o usuário deve manter o sopro/sucção
+// para que o Arduino entenda como um comando "Longo".
+const unsigned long longPressTime = 600; 
+
+// ==============================================================================
+// 3. CONFIGURAÇÕES DE CALIBRAÇÃO (STARTUP)
+// ==============================================================================
+// Tempo que o Arduino espera ao ligar antes de começar a ler (para estabilizar a voltagem)
 const unsigned long stabilizationTime = 2000; 
+// Quantas leituras o Arduino fará para calcular a média do "zero" do sensor
 const int calibrationSamples = 200;           
 
-// --- Variáveis de Estado ---
-int baselinePressure = 0;      
-bool isDragging = false;       // Estado do modo arrastar (Botão esquerdo preso)
-unsigned long actionStartTime = 0; 
-bool actionAlreadyExecuted = false; 
+// ==============================================================================
+// 4. VARIÁVEIS GLOBAIS (MEMÓRIA DO SISTEMA)
+// ==============================================================================
+int baselinePressure = 0;          // Guarda o valor de pressão ambiente (o "zero")
+bool isDragging = false;           // Variável de controle: O botão esquerdo está preso?
+unsigned long actionStartTime = 0; // Cronômetro: Marca quando o sopro começou
+bool actionAlreadyExecuted = false;// Trava: Impede que uma ação se repita no mesmo sopro
 
-enum State { NEUTRAL, PUFFING, SIPPING };
+// Enumeração: Cria nomes legíveis para os estados do sensor
+enum State { 
+  NEUTRAL, // Estado Neutro (Sem sopro nem sucção)
+  PUFFING, // Estado de Sopro (Pressão Positiva)
+  SIPPING  // Estado de Sucção (Pressão Negativa)
+};
+
+// Variáveis que armazenam o estado atual e o anterior para comparação
 State currentState = NEUTRAL;
 State lastState = NEUTRAL;
 
+// ==============================================================================
+// 5. SETUP (EXECUTADO UMA VEZ AO LIGAR)
+// ==============================================================================
 void setup() {
+  // Inicia a comunicação serial (útil para debug no PC)
   Serial.begin(9600);
+  
+  // Configura o pino do LED como saída
   pinMode(pinLed, OUTPUT);
   
-  // -- FASE 1: ESTABILIZAÇÃO --
-  Serial.println("Aguardando estabilizacao...");
+  // --- FASE 1: ESTABILIZAÇÃO ---
+  Serial.println("Aguardando estabilizacao do hardware...");
+  
+  // Marca o tempo atual
   unsigned long startWait = millis();
+  
+  // Loop de espera: Fica aqui até dar o tempo de 'stabilizationTime'
   while (millis() - startWait < stabilizationTime) {
+    // Pisca o LED para avisar o usuário: "Aguarde, não sopre agora"
     digitalWrite(pinLed, HIGH); delay(100);
     digitalWrite(pinLed, LOW);  delay(100);
   }
 
-  // -- FASE 2: CALIBRAÇÃO --
-  Serial.println("Calibrando...");
-  digitalWrite(pinLed, HIGH); 
-  long total = 0;
+  // --- FASE 2: CALIBRAÇÃO ---
+  Serial.println("Lendo linha de base (Zero)...");
+  digitalWrite(pinLed, HIGH); // Acende o LED fixo (Indicando leitura)
+  
+  long total = 0; // Variável temporária para somar as leituras
+  
+  // Faz 200 leituras do sensor
   for (int i = 0; i < calibrationSamples; i++) {
     total += analogRead(pinTransducer);
-    delay(5); 
+    delay(5); // Pequena pausa para evitar ruído elétrico
   }
-  baselinePressure = total / calibrationSamples;
-  digitalWrite(pinLed, LOW); 
   
-  Serial.print("Base: ");
+  // Calcula a média (Soma total dividida pelo número de leituras)
+  baselinePressure = total / calibrationSamples;
+  
+  digitalWrite(pinLed, LOW); // Apaga o LED. O sistema está pronto.
+  
+  Serial.print("Calibracao concluida. Valor Base: ");
   Serial.println(baselinePressure);
   
+  // Inicia a biblioteca de emulação do Mouse
   Mouse.begin();
 }
 
+// ==============================================================================
+// 6. LOOP (EXECUTADO REPETIDAMENTE)
+// ==============================================================================
 void loop() {
-  // ==========================================
-  // 1. Movimento do Mouse (Joystick)
-  // ==========================================
-  int xVal = analogRead(pinJoyX);
-  int yVal = analogRead(pinJoyY);
   
+  // ---------------------------------------------------------
+  // BLOCO A: LEITURA E MOVIMENTO DO JOYSTICK
+  // ---------------------------------------------------------
+  int xVal = analogRead(pinJoyX); // Lê o eixo X (0 a 1023)
+  int yVal = analogRead(pinJoyY); // Lê o eixo Y (0 a 1023)
+  
+  // Matemática de Movimento:
+  // Subtrai 512 para que o centro seja 0 (varia de -512 a +512)
+  // Divide pela sensibilidade para suavizar o movimento
   int moveX = (xVal - 512) / (512 / mouseSensitivity);
   int moveY = (yVal - 512) / (512 / mouseSensitivity); 
 
+  // Verifica se precisa inverter a direção conforme configurado no início
   if (invertHorizontal) moveX = -moveX;
   if (invertVertical)   moveY = -moveY;
 
+  // Só envia comando ao PC se houver movimento real (diferente de 0)
   if (moveX != 0 || moveY != 0) {
-    Mouse.move(moveX, moveY, 0); 
+    Mouse.move(moveX, moveY, 0); // (X, Y, Scroll)
   }
 
-  // ==========================================
-  // 2. Leitura de Pressão
-  // ==========================================
-  int currentPressure = analogRead(pinTransducer);
+  // ---------------------------------------------------------
+  // BLOCO B: LEITURA DO TRANSDUTOR DE PRESSÃO
+  // ---------------------------------------------------------
+  int currentPressure = analogRead(pinTransducer); // Lê o valor atual
+  
+  // Calcula a diferença entre o valor atual e o valor calibrado (zero)
   int diff = currentPressure - baselinePressure;
   
+  // Define o Estado Atual baseado na força do sopro/sucção
   if (diff > pressureThreshold) {
-    currentState = PUFFING;
+    currentState = PUFFING; // Pressão positiva acima do limite -> Soprando
   } else if (diff < -pressureThreshold) {
-    currentState = SIPPING;
+    currentState = SIPPING; // Pressão negativa abaixo do limite -> Sugando
   } else {
-    currentState = NEUTRAL;
+    currentState = NEUTRAL; // Dentro da zona morta -> Parado
   }
 
-  // ==========================================
-  // 3. Lógica de Ações (Atualizada)
-  // ==========================================
+  // ---------------------------------------------------------
+  // BLOCO C: MÁQUINA DE ESTADOS (LÓGICA DOS CLIQUES)
+  // ---------------------------------------------------------
 
-  // --- INÍCIO (Borda de Subida) ---
+  // C.1 -> INÍCIO DA AÇÃO (O momento exato que começa a soprar/sugar)
   if (currentState != NEUTRAL && lastState == NEUTRAL) {
-    actionStartTime = millis();
-    actionAlreadyExecuted = false; 
+    actionStartTime = millis();    // Inicia o cronômetro
+    actionAlreadyExecuted = false; // Reseta a trava de execução
   }
 
-  // --- DURANTE (Mantendo sopro/sucção) ---
+  // C.2 -> DURANTE A AÇÃO (Enquanto o usuário mantém o sopro/sucção)
   if (currentState != NEUTRAL && !actionAlreadyExecuted) {
+    
+    // Verifica se o tempo decorrido já passou do tempo de "Longo"
     if (millis() - actionStartTime > longPressTime) {
       
+      // CASO 1: SOPRO LONGO DETECTADO
       if (currentState == PUFFING) { 
-        // SOPRO LONGO -> Clique Duplo
-        Mouse.click(MOUSE_LEFT); delay(50); Mouse.click(MOUSE_LEFT);
-        actionAlreadyExecuted = true; 
-        // Se estava arrastando, o duplo clique também solta o botão, resetamos o estado:
+        // Executa Clique Duplo
+        Mouse.click(MOUSE_LEFT); 
+        delay(50); 
+        Mouse.click(MOUSE_LEFT);
+        
+        actionAlreadyExecuted = true; // Trava para não repetir
+        
+        // Segurança: Se estava arrastando algo, o duplo clique solta o objeto
         if (isDragging) { isDragging = false; } 
       } 
+      // CASO 2: SUGA LONGO DETECTADO
       else if (currentState == SIPPING) { 
-        // SUGA LONGO -> Clique Direito
-        // Se estiver arrastando, solta antes de clicar direito para evitar confusão
+        // Executa Clique Direito
+        
+        // Segurança: Se estava arrastando, solta antes de clicar com o direito
         if (isDragging) {
            Mouse.release(MOUSE_LEFT);
            isDragging = false;
         }
         Mouse.click(MOUSE_RIGHT);
-        actionAlreadyExecuted = true; 
+        
+        actionAlreadyExecuted = true; // Trava para não repetir
       }
     }
   }
 
-  // --- FIM (Soltou - Borda de Descida) ---
-  // Aqui processamos as ações "Curtas" (Rápido)
+  // C.3 -> FIM DA AÇÃO (O momento que o usuário para de soprar/sugar)
+  // Aqui processamos as ações "Curtas/Rápidas", pois o usuário soltou antes do tempo longo
   if (currentState == NEUTRAL && lastState != NEUTRAL) {
     
-    // Só executa se não tiver feito a ação longa
+    // Só entra aqui se a ação Longa NÃO tiver acontecido ainda
     if (!actionAlreadyExecuted) {
       
+      // CASO 3: O USUÁRIO PAROU DE SOPRAR (SOPRO CURTO)
       if (lastState == PUFFING) {
-        // SOPRO RÁPIDO -> Clique Esquerdo
+        // Se estava no modo arrastar, o sopro serve para SOLTAR o item
         if (isDragging) {
-           // Se estava arrastando e soprou rápido, solta o item.
            Mouse.release(MOUSE_LEFT);
            isDragging = false;
         } else {
+           // Se não estava arrastando, é um clique esquerdo normal
            Mouse.click(MOUSE_LEFT);
         }
       } 
+      // CASO 4: O USUÁRIO PAROU DE SUGAR (SUGA CURTO)
       else if (lastState == SIPPING) {
-        // SUGA RÁPIDO -> Alternar Arrastar (Toggle Drag)
+        // Alterna o modo Arrastar (Toggle)
         if (!isDragging) {
-          Mouse.press(MOUSE_LEFT); // Segura
-          isDragging = true;
+          Mouse.press(MOUSE_LEFT); // Segura o botão esquerdo
+          isDragging = true;       // Atualiza a variável de controle
         } else {
-          Mouse.release(MOUSE_LEFT); // Solta
-          isDragging = false;
+          Mouse.release(MOUSE_LEFT); // Solta o botão esquerdo
+          isDragging = false;        // Atualiza a variável de controle
         }
       }
     }
   }
 
+  // Atualiza o estado anterior para ser usado na próxima volta do loop
   lastState = currentState;
+  
+  // Pequeno atraso para estabilidade do processador
   delay(10); 
 }
